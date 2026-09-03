@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { useParams } from 'next/navigation'
+import { useParams, useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 
 type Team = { id: string; name: string }
@@ -27,6 +27,7 @@ type HistoryItem = {
 
 export default function AdminPage() {
   const { roomId } = useParams()
+  const router = useRouter()
   const [roomCode, setRoomCode] = useState('')
   const [teams, setTeams] = useState<Team[]>([])
   const [currentRound, setCurrentRound] = useState<Round | null>(null)
@@ -69,7 +70,7 @@ export default function AdminPage() {
   useEffect(() => {
     if (!currentRound) return
     loadBids()
-    setManualWinner(null) // Reset vincitore manuale al cambio round
+    setManualWinner(null)
     const bidsSub = supabase
       .channel('admin-bids')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'bids', filter: `round_id=eq.${currentRound.id}` }, loadBids)
@@ -223,9 +224,18 @@ export default function AdminPage() {
 
   return (
     <main className="min-h-screen bg-black text-white p-4 max-w-lg mx-auto font-sans pb-16">
+      {/* HEADER ADMIN CON TASTO INDIETRO DASHBOARD */}
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-xl font-bold">👑 Admin / Banditore</h1>
-        <span className="bg-gray-800 px-3 py-1 rounded-lg text-sm font-mono">{roomCode}</span>
+        <div>
+          <h1 className="text-xl font-bold">👑 Admin / Banditore</h1>
+          <span className="bg-gray-800 px-3 py-1 rounded-lg text-sm font-mono text-gray-300">{roomCode}</span>
+        </div>
+        <button 
+          onClick={() => router.push('/')} 
+          className="bg-gray-900 border border-gray-700 text-xs px-3 py-2 rounded-xl text-gray-300 hover:text-white active:scale-95 transition-transform"
+        >
+          ← Dashboard Home
+        </button>
       </div>
 
       {/* Squadre */}
