@@ -16,6 +16,8 @@ type Bid = {
   revealed_extra_credits: number | null 
 }
 
+type RosterPlayer = { id: string; player_name: string; price: number }
+
 export default function RoomPage() {
   const { roomId } = useParams()
   const router = useRouter()
@@ -23,24 +25,31 @@ export default function RoomPage() {
   const [teamName, setTeamName] = useState('')
   const [currentRound, setCurrentRound] = useState<Round | null>(null)
   const [myBid, setMyBid] = useState<Bid | null>(null)
+  
+  // Rosa del giocatore scaricata da Supabase
+  const [roster, setRoster] = useState<RosterPlayer[]>([])
+  
   const [playerGiven, setPlayerGiven] = useState('')
-  const [purchasePrice, setPurchasePrice] = useState('')
+  const [purchasePrice, setPurchasePrice] = useState('0')
   const [extraCredits, setExtraCredits] = useState('')
   const [loading, setLoading] = useState(false)
   const [allBids, setAllBids] = useState<Bid[]>([])
   const [teams, setTeams] = useState<{ id: string; name: string }[]>([])
 
-  // Funzione che accetta solo cifre numeriche (0-9) e previene lettere/simboli
   const handleNumericInput = (value: string, setter: (val: string) => void) => {
     const cleanValue = value.replace(/[^0-9]/g, '')
     setter(cleanValue)
   }
 
   useEffect(() => {
-    setTeamId(localStorage.getItem('team_id') || '')
-    setTeamName(localStorage.getItem('team_name') || '')
+    const tId = localStorage.getItem('team_id') || ''
+    const tName = localStorage.getItem('team_name') || ''
+    setTeamId(tId)
+    setTeamName(tName)
+    
     loadTeams()
     loadCurrentRound()
+    if (tName) loadRoster(tName)
 
     const roundsSub = supabase
       .channel('rounds-room')
@@ -79,6 +88,32 @@ export default function RoomPage() {
       revealMyBid()
     }
   }, [currentRound?.status])
+
+  // CARICAMENTO ROSA DELLA SQUADRA
+  async function loadRoster(tName: string) {
+    const { data } = await supabase
+      .from('rosters')
+      .select('*')
+      .eq('team_name', tName)
+      .order('player_name')
+
+    if (data && data.length > 0) {
+      setRoster(data)
+    }
+  }
+
+  // Gestisce il cambio di selezione del giocatore da cedere e imposta il prezzo
+  function handleSelectPlayerGiven(selectedName: string) {
+    setPlayerGiven(selectedName)
+    if (!selectedName || selectedName === 'NESSUNO') {
+      setPurchasePrice('0')
+      return
+    }
+    const found = roster.find(p => p.player_name === selectedName)
+    if (found) {
+      setPurchasePrice(found.price.toString())
+    }
+  }
 
   async function loadTeams() {
     const { data } = await supabase.from('teams').select().eq('room_id', roomId).order('joined_at')
@@ -153,7 +188,7 @@ export default function RoomPage() {
   }
 
   async function sealBid() {
-    if (!currentRound || !teamId || !playerGiven || !purchasePrice) return
+    if (!currentRound || !teamId) return
     setLoading(true)
 
     const price = parseInt(purchasePrice) || 0
@@ -161,14 +196,14 @@ export default function RoomPage() {
     const total = price + extra
 
     const secret = crypto.randomUUID()
-    const payload = `${playerGiven}|${price}|${extra}|${secret}`
+    const payload = `${playerGiven || 'NESSUNO'}|${price}|${extra}|${secret}`
     const encoded = new TextEncoder().encode(payload)
     const hashBuffer = await crypto.subtle.digest('SHA-256', encoded)
     const hashArray = Array.from(new Uint8Array(hashBuffer))
     const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('')
 
     localStorage.setItem(`secret_${currentRound.id}`, secret)
-    localStorage.setItem(`offer_${currentRound.id}`, JSON.stringify({ playerGiven, price, extra, total }))
+    localStorage.setItem(`offer_${currentRound.id}`, JSON.stringify({ playerGiven: playerGiven || 'NESSUNO', price, extra, total }))
 
     await supabase.from('bids').upsert({
       round_id: currentRound.id,
@@ -184,7 +219,6 @@ export default function RoomPage() {
 
   const total = (parseInt(purchasePrice) || 0) + (parseInt(extraCredits) || 0)
 
-  // LOGICA TIE-BREAK PARI TOTALE E PARI EXTRA
   const validBids = allBids.filter(b => b.participation === 'joined' && b.revealed_total !== null)
   
   const sortedBids = [...validBids].sort((a, b) => {
@@ -283,39 +317,66 @@ export default function RoomPage() {
 
       {currentRound.status === 'open_for_participation' && myBid?.participation === 'joined' && !myBid.commit_hash && (
         <div className="flex flex-col gap-3 mt-4">
-          <input
-            className="bg-gray-900 border border-gray-700 rounded-xl px-4 py-3 text-white placeholder-gray-500"
-            placeholder="Giocatore da cedere"
-            value={playerGiven}
-            onChange={e => setPlayerGiven(e.target.value)}
-          />
-          <input
-            className="bg-gray-900 border border-gray-700 rounded-xl px-4 py-3 text-white placeholder-gray-500"
-            placeholder="Prezzo acquisto"
-            type="text"
-            inputMode="numeric"
-            pattern="[0-9]*"
-            value={purchasePrice}
-            onChange={e => handleNumericInput(e.target.value, setPurchasePrice)}
-          />
-          <input
-            className="bg-gray-900 border border-gray-700 rounded-xl px-4 py-3 text-white placeholder-gray-500"
-            placeholder="Crediti aggiuntivi"
-            type="text"
-            inputMode="numeric"
-            pattern="[0-9]*"
-            value={extraCredits}
-            onChange={e => handleNumericInput(e.target.value, setExtraCredits)}
-          />
-          {purchasePrice && (
-            <div className="bg-gray-800 rounded-xl p-3 text-center">
-              <p className="text-gray-400 text-sm">Offerta totale</p>
-              <p className="text-2xl font-bold">{total}</p>
-            </div>
-          )}
+          {/* SELEZIONE GIOCATORE DA CEDERE */}
+          <div>
+            <label className="text-xs text-gray-400 block mb-1 font-semibold">Giocatore da cedere:</label>
+            {roster.length > 0 ? (
+              <select
+                className="w-full bg-gray-900 border border-gray-700 rounded-xl px-4 py-3 text-white font-semibold"
+                value={playerGiven}
+                onChange={e => handleSelectPlayerGiven(e.target.value)}
+              >
+                <option value="">-- Seleziona dalla tua rosa --</option>
+                <option value="NESSUNO">❌ Nessuno (Solo crediti extra)</option>
+                {roster.map(p => (
+                  <option key={p.id} value={p.player_name}>
+                    {p.player_name} ({p.price} FM)
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                className="bg-gray-900 border border-gray-700 rounded-xl px-4 py-3 text-white placeholder-gray-500 w-full"
+                placeholder="Giocatore da cedere"
+                value={playerGiven}
+                onChange={e => setPlayerGiven(e.target.value)}
+              />
+            )}
+          </div>
+
+          <div>
+            <label className="text-xs text-gray-400 block mb-1 font-semibold">Valore Svincolo (FM):</label>
+            <input
+              className="bg-gray-900 border border-gray-700 rounded-xl px-4 py-3 text-white placeholder-gray-500 w-full font-mono text-lg opacity-80"
+              placeholder="0"
+              type="text"
+              readOnly={roster.length > 0}
+              value={purchasePrice}
+              onChange={e => handleNumericInput(e.target.value, setPurchasePrice)}
+            />
+          </div>
+
+          <div>
+            <label className="text-xs text-gray-400 block mb-1 font-semibold">Crediti aggiuntivi:</label>
+            <input
+              className="bg-gray-900 border border-gray-700 rounded-xl px-4 py-3 text-white placeholder-gray-500 w-full font-mono text-lg"
+              placeholder="0"
+              type="text"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              value={extraCredits}
+              onChange={e => handleNumericInput(e.target.value, setExtraCredits)}
+            />
+          </div>
+
+          <div className="bg-gray-800 rounded-xl p-3 text-center border border-gray-700">
+            <p className="text-gray-400 text-xs">Offerta Totale Busta</p>
+            <p className="text-2xl font-bold text-green-400 font-mono">{total} FM</p>
+          </div>
+
           <button
             onClick={sealBid}
-            disabled={loading || !playerGiven || !purchasePrice}
+            disabled={loading}
             className="bg-red-600 text-white font-bold py-4 rounded-xl text-lg disabled:opacity-50 active:scale-95 transition-transform select-none touch-manipulation"
           >
             🔒 Sigilla offerta
