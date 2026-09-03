@@ -12,8 +12,16 @@ export default function Home() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
-  // 1. Crea la Stanza come Admin (Banditore neutrale - Senza creare squadra)
+  // 1. Crea la Stanza come Admin (Protetta da Password Master)
   async function createRoom() {
+    const password = prompt("Inserisci la password Admin per creare una stanza:")
+
+    // Puoi cambiare con la password che preferisci!
+    if (password !== "stupidicretiny") {
+      alert("Password errata! Non sei autorizzato a creare stanze Admin.")
+      return
+    }
+
     setLoading(true)
     setError('')
 
@@ -102,13 +110,13 @@ export default function Home() {
           <button
             onClick={createRoom}
             disabled={loading}
-            className="bg-white text-black font-bold py-4 rounded-xl text-lg disabled:opacity-50"
+            className="bg-white text-black font-bold py-4 rounded-xl text-lg disabled:opacity-50 active:scale-95 transition-transform select-none touch-manipulation"
           >
             {loading ? 'Creazione...' : '👑 Crea stanza (Admin)'}
           </button>
           <button
             onClick={() => setMode('join')}
-            className="border border-white text-white font-bold py-4 rounded-xl text-lg"
+            className="border border-white text-white font-bold py-4 rounded-xl text-lg active:scale-95 transition-transform select-none touch-manipulation"
           >
             🚪 Entra in una stanza
           </button>
@@ -134,7 +142,7 @@ export default function Home() {
           <button
             onClick={joinRoom}
             disabled={loading || !teamName.trim() || !joinCode.trim()}
-            className="bg-white text-black font-bold py-4 rounded-xl text-lg disabled:opacity-50"
+            className="bg-white text-black font-bold py-4 rounded-xl text-lg disabled:opacity-50 active:scale-95 transition-transform select-none touch-manipulation"
           >
             {loading ? 'Accesso...' : 'Entra'}
           </button>
