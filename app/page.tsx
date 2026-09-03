@@ -44,14 +44,12 @@ export default function Home() {
   async function loadPastSessions() {
     setLoading(true)
     try {
-      // Recupera tutte le leghe distinte
       const { data: rooms } = await supabase.from('rooms').select('id, league_name, session_name, code')
       
       if (rooms) {
         const leagues = Array.from(new Set(rooms.map(r => r.league_name || 'FantaPandy')))
         setExistingLeagues(leagues)
 
-        // Filtra le sessioni della lega selezionata
         const filtered = rooms.filter(r => (r.league_name || 'FantaPandy') === selectedLeagueForHistory)
         setPastSessions(filtered)
 
@@ -101,7 +99,7 @@ export default function Home() {
     setError('')
 
     try {
-      // Controllo duplicato
+      // Controllo duplicati
       const { data: existingSession } = await supabase
         .from('rooms')
         .select('id')
