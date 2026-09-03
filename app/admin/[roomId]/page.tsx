@@ -99,6 +99,7 @@ export default function AdminPage() {
     if (!currentRound) return
     const { data } = await supabase.from('bids').select().eq('round_id', currentRound.id)
     if (data) setBids(data)
+    await loadTeams()
   }
 
   async function loadHistory() {
