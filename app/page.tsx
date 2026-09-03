@@ -12,7 +12,8 @@ export default function Home() {
   
   // Configurazione Admin
   const [adminPasswordInput, setAdminPasswordInput] = useState('')
-  const [sessionName, setSessionName] = useState('Asta Iniziale 2026/27')
+  const [leagueName, setLeagueName] = useState('FantaPandy')
+  const [sessionName, setSessionName] = useState('')
   const [creationMode, setCreationMode] = useState<'preset' | 'free'>('preset')
 
   // Accesso Partecipante
@@ -47,13 +48,12 @@ export default function Home() {
       return
     }
 
-    // Password corretta: passa alla configurazione della sessione
     setMode('admin_config')
   }
 
-  // 2. Crea la Stanza con i Dati della Sessione
+  // 2. Crea la Stanza con Lega e Sessione
   async function createRoom() {
-    if (!sessionName.trim()) return
+    if (!leagueName.trim() || !sessionName.trim()) return
     setLoading(true)
     setError('')
 
@@ -78,6 +78,7 @@ export default function Home() {
           code, 
           status: 'waiting',
           mode: creationMode,
+          league_name: leagueName.trim(),
           session_name: sessionName.trim(),
           available_teams: teamsToUpload,
           admin_password: adminPasswordInput
@@ -197,7 +198,7 @@ export default function Home() {
         </div>
       )}
 
-      {/* LOGIN ADMIN (PASSWORD) */}
+      {/* LOGIN ADMIN */}
       {mode === 'admin_auth' && (
         <div className="flex flex-col gap-4 w-full max-w-xs">
           <h2 className="text-xl font-bold text-center">Area Riservata Admin</h2>
@@ -222,13 +223,23 @@ export default function Home() {
         </div>
       )}
 
-      {/* CONFIGURAZIONE SESSIONE ADMIN */}
+      {/* CONFIGURAZIONE LEGA E SESSIONE ADMIN */}
       {mode === 'admin_config' && (
         <div className="flex flex-col gap-4 w-full max-w-xs">
           <h2 className="text-xl font-bold text-center">Configura Nuova Sessione</h2>
           
           <div>
-            <label className="text-xs text-gray-400 block mb-1">Nome della Sessione:</label>
+            <label className="text-xs text-gray-400 block mb-1 font-semibold uppercase">Nome Lega:</label>
+            <input
+              className="w-full bg-gray-900 border border-gray-700 rounded-xl px-4 py-3 text-white placeholder-gray-500 font-semibold"
+              placeholder="es. FantaPandy"
+              value={leagueName}
+              onChange={e => setLeagueName(e.target.value)}
+            />
+          </div>
+
+          <div>
+            <label className="text-xs text-gray-400 block mb-1 font-semibold uppercase">Nome Sessione / Asta:</label>
             <input
               className="w-full bg-gray-900 border border-gray-700 rounded-xl px-4 py-3 text-white placeholder-gray-500"
               placeholder="es. Asta Estiva 2026/27"
@@ -238,7 +249,7 @@ export default function Home() {
           </div>
 
           <div className="bg-gray-900 p-3 rounded-xl border border-gray-800 text-center">
-            <label className="text-[10px] text-gray-400 block mb-1.5 font-semibold uppercase tracking-wider">Modalità Lega</label>
+            <label className="text-[10px] text-gray-400 block mb-1.5 font-semibold uppercase tracking-wider">Modalità Squadre</label>
             <div className="flex gap-2">
               <button
                 type="button"
@@ -265,7 +276,7 @@ export default function Home() {
 
           <button
             onClick={createRoom}
-            disabled={loading || !sessionName.trim()}
+            disabled={loading || !leagueName.trim() || !sessionName.trim()}
             className="bg-white text-black font-bold py-4 rounded-xl text-lg disabled:opacity-50 active:scale-95 transition-transform select-none touch-manipulation"
           >
             {loading ? 'Avvio...' : '🚀 Avvia Sessione Asta'}
@@ -295,10 +306,13 @@ export default function Home() {
           ) : (
             <>
               <div className="bg-gray-900 p-3 rounded-xl border border-gray-800 text-center mb-2">
-                <span className="text-xs text-gray-400 block uppercase font-mono">
-                  {roomData.session_name || 'Stanza Trovata'}
+                <span className="text-[10px] text-gray-400 uppercase tracking-widest block">
+                  {roomData.league_name || 'Lega'}
                 </span>
-                <span className="text-lg font-bold text-blue-400">{roomData.code}</span>
+                <span className="text-xs text-blue-400 block font-semibold mb-1">
+                  {roomData.session_name || 'Sessione Asta'}
+                </span>
+                <span className="text-xl font-bold font-mono text-white">{roomData.code}</span>
               </div>
 
               {roomData.mode === 'preset' ? (
