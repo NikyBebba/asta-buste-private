@@ -36,6 +36,7 @@ export default function AdminPage() {
   const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(null)
   const [playerInput, setPlayerInput] = useState('')
   const [loading, setLoading] = useState(false)
+  const [manualWinner, setManualWinner] = useState<Bid | null>(null)
 
   useEffect(() => {
     setRoomCode(localStorage.getItem('room_code') || '')
@@ -68,6 +69,7 @@ export default function AdminPage() {
   useEffect(() => {
     if (!currentRound) return
     loadBids()
+    setManualWinner(null) // Reset vincitore manuale al cambio round
     const bidsSub = supabase
       .channel('admin-bids')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'bids', filter: `round_id=eq.${currentRound.id}` }, loadBids)
@@ -151,24 +153,23 @@ export default function AdminPage() {
 
   async function declareWinner() {
     if (!currentRound) return
-    const validBids = bids.filter(b => b.participation === 'joined' && b.revealed_total !== null && b.revealed_total !== undefined)
-    
-    if (validBids.length === 0) {
-      if (confirm("Nessuna offerta ricevuta. Chiudere come INVENDUTO?")) {
+    const targetWinner = manualWinner || autoWinner
+
+    if (!targetWinner) {
+      if (confirm("Nessuna offerta valida selezionata. Chiudere come INVENDUTO?")) {
         await skipUnsoldRound()
       }
       return
     }
 
     setLoading(true)
-    const winner = validBids.reduce((a, b) => ((b.revealed_total ?? 0) > (a.revealed_total ?? 0) ? b : a))
 
     await supabase.from('history').insert({
       round_id: currentRound.id,
       room_id: roomId,
       player_name: currentRound.player_name,
-      winning_team_id: winner.team_id,
-      winning_amount: winner.revealed_total,
+      winning_team_id: targetWinner.team_id,
+      winning_amount: targetWinner.revealed_total,
     })
 
     await supabase.from('auction_rounds').update({ status: 'winner_declared' }).eq('id', currentRound.id)
@@ -200,9 +201,25 @@ export default function AdminPage() {
     setLoading(false)
   }
 
-  const winner = currentRound?.status === 'revealed'
-    ? bids.filter(b => b.revealed_total !== null).reduce<Bid | null>((a, b) => (!a || (b.revealed_total ?? 0) > (a.revealed_total ?? 0) ? b : a), null)
-    : null
+  // --- LOGICA DI TIE-BREAK PARI TOTALE E PARI EXTRA ---
+  const validBids = bids.filter(b => b.participation === 'joined' && b.revealed_total !== null && b.revealed_total !== undefined)
+  
+  const sortedBids = [...validBids].sort((a, b) => {
+    const totA = a.revealed_total ?? 0
+    const totB = b.revealed_total ?? 0
+    if (totB !== totA) return totB - totA
+
+    const extraA = a.revealed_extra_credits ?? 0
+    const extraB = b.revealed_extra_credits ?? 0
+    return extraB - extraA
+  })
+
+  const isPerfectTie = sortedBids.length > 1 && 
+    sortedBids[0].revealed_total === sortedBids[1].revealed_total && 
+    sortedBids[0].revealed_extra_credits === sortedBids[1].revealed_extra_credits
+
+  const autoWinner = !isPerfectTie && sortedBids.length > 0 ? sortedBids[0] : null
+  const activeWinner = manualWinner || autoWinner
 
   return (
     <main className="min-h-screen bg-black text-white p-4 max-w-lg mx-auto font-sans pb-16">
@@ -286,31 +303,75 @@ export default function AdminPage() {
 
           {currentRound.status === 'revealed' && (
             <div>
+              {/* PAREGGIO ASSOLUTO: MODULO ASSEGNAZIONE MANUALE ADMIN */}
+              {isPerfectTie && !manualWinner && (
+                <div className="bg-amber-950/40 border border-amber-500 p-4 rounded-xl mb-4 text-xs text-center">
+                  <p className="text-amber-400 font-bold text-sm mb-1">⚠️ Pareggio Perfetto Rilevato!</p>
+                  <p className="text-gray-300 mb-3">
+                    Stesso totale ({sortedBids[0].revealed_total} cr) e stessi crediti extra ({sortedBids[0].revealed_extra_credits ?? 0} cr). Seleziona il vincitore:
+                  </p>
+                  <div className="flex flex-col gap-2">
+                    {sortedBids.filter(b => 
+                      b.revealed_total === sortedBids[0].revealed_total && 
+                      b.revealed_extra_credits === sortedBids[0].revealed_extra_credits
+                    ).map(b => {
+                      const tName = teams.find(t => t.id === b.team_id)?.name
+                      return (
+                        <button
+                          key={b.id}
+                          onClick={() => setManualWinner(b)}
+                          className="bg-amber-500 text-black font-bold py-2 px-3 rounded-lg hover:bg-amber-400 transition"
+                        >
+                          Assegna a {tName}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {manualWinner && (
+                <div className="bg-green-950/40 border border-green-500 p-3 rounded-xl mb-4 text-xs text-center flex justify-between items-center">
+                  <span className="text-green-400 font-bold">
+                    Scelta Manuale: {teams.find(t => t.id === manualWinner.team_id)?.name}
+                  </span>
+                  <button 
+                    onClick={() => setManualWinner(null)}
+                    className="text-gray-400 underline text-[10px]"
+                  >
+                    Cambia
+                  </button>
+                </div>
+              )}
+
               <table className="w-full text-sm mb-4">
                 <thead>
                   <tr className="text-gray-400 border-b border-gray-800">
                     <th className="text-left py-2">Squadra</th>
                     <th className="text-left py-2">Ceduto</th>
-                    <th className="text-right py-2">Offerta</th>
+                    <th className="text-right py-2 font-mono">Extra</th>
+                    <th className="text-right py-2">Totale</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {bids.filter(b => b.participation === 'joined').sort((a, b) => (b.revealed_total || 0) - (a.revealed_total || 0)).map(bid => {
+                  {sortedBids.map(bid => {
                     const team = teams.find(t => t.id === bid.team_id)
-                    const isWinner = winner && bid.id === winner.id
+                    const isWinner = activeWinner && bid.id === activeWinner.id
                     return (
                       <tr key={bid.id} className={`border-b border-gray-800 ${isWinner ? 'text-yellow-400 font-bold' : ''}`}>
                         <td className="py-2">{isWinner ? '🏆 ' : ''}{team?.name}</td>
                         <td className="py-2">{bid.revealed_player_given ? `${bid.revealed_player_given} (${bid.revealed_purchase_price})` : '—'}</td>
+                        <td className="py-2 text-right text-gray-400 text-xs font-mono">+{bid.revealed_extra_credits ?? 0}</td>
                         <td className="py-2 text-right">{bid.revealed_total !== null ? `${bid.revealed_total} cr` : 'In attesa...'}</td>
                       </tr>
                     )
                   })}
                 </tbody>
               </table>
+
               <button 
                 onClick={declareWinner} 
-                disabled={loading} 
+                disabled={loading || (isPerfectTie && !manualWinner)} 
                 className="w-full bg-green-500 text-black font-bold py-4 rounded-xl text-lg disabled:opacity-50 mb-3 active:scale-95 transition-transform select-none touch-manipulation"
               >
                 ✅ Conferma vincitore e prossimo

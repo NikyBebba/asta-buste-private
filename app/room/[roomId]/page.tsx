@@ -178,10 +178,26 @@ export default function RoomPage() {
 
   const total = (parseInt(purchasePrice) || 0) + (parseInt(extraCredits) || 0)
 
+  // LOGICA TIE-BREAK PARI TOTALE E PARI EXTRA
   const validBids = allBids.filter(b => b.participation === 'joined' && b.revealed_total !== null)
-  const winningBid = validBids.length > 0 
-    ? validBids.reduce((a, b) => ((b.revealed_total ?? 0) > (a.revealed_total ?? 0) ? b : a)) 
-    : null
+  
+  // Ordina le buste: prima per Totale DESC, poi per Crediti Extra DESC
+  const sortedBids = [...validBids].sort((a, b) => {
+    const totA = a.revealed_total ?? 0
+    const totB = b.revealed_total ?? 0
+    if (totB !== totA) return totB - totA
+
+    const extraA = a.revealed_extra_credits ?? 0
+    const extraB = b.revealed_extra_credits ?? 0
+    return extraB - extraA
+  })
+
+  // Verifica se le prime due offerte sono in pareggio assoluto
+  const isPerfectTie = sortedBids.length > 1 && 
+    sortedBids[0].revealed_total === sortedBids[1].revealed_total && 
+    sortedBids[0].revealed_extra_credits === sortedBids[1].revealed_extra_credits
+
+  const winningBid = !isPerfectTie && sortedBids.length > 0 ? sortedBids[0] : null
   const isMyVictory = winningBid && winningBid.team_id === teamId
   const winningTeamName = teams.find(t => t.id === winningBid?.team_id)?.name
 
@@ -309,7 +325,15 @@ export default function RoomPage() {
 
       {currentRound.status === 'revealed' && (
         <div className="mt-4">
-          {winningBid ? (
+          {isPerfectTie ? (
+            <div className="bg-amber-500/10 border-2 border-amber-500 rounded-2xl p-4 text-center mb-6">
+              <p className="text-3xl mb-1">⚖️</p>
+              <p className="text-amber-400 font-extrabold text-xl">PAREGGIO PERFETTO!</p>
+              <p className="text-xs text-gray-300 mt-1">
+                L'Admin sta assegnando manualmente il giocatore secondo regolamento.
+              </p>
+            </div>
+          ) : winningBid ? (
             isMyVictory ? (
               <div className="bg-yellow-500/10 border-2 border-yellow-500 rounded-2xl p-4 text-center mb-6">
                 <p className="text-3xl mb-1">🏆</p>
@@ -322,7 +346,9 @@ export default function RoomPage() {
               <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 text-center mb-6">
                 <p className="text-xl mb-1">❌</p>
                 <p className="text-gray-300 font-bold">Aggiudicato a {winningTeamName}</p>
-                <p className="text-xs text-gray-500 mt-1">Offerta vincente: {winningBid.revealed_total} crediti</p>
+                <p className="text-xs text-gray-500 mt-1">
+                  Offerta vincente: {winningBid.revealed_total} crediti ({winningBid.revealed_extra_credits ?? 0} extra)
+                </p>
               </div>
             )
           ) : (
@@ -334,17 +360,19 @@ export default function RoomPage() {
               <tr className="text-gray-400 border-b border-gray-800">
                 <th className="text-left py-2">Squadra</th>
                 <th className="text-left py-2">Ceduto</th>
-                <th className="text-right py-2">Offerta</th>
+                <th className="text-right py-2 font-mono">Extra</th>
+                <th className="text-right py-2">Totale</th>
               </tr>
             </thead>
             <tbody>
-              {allBids.filter(b => b.participation === 'joined').sort((a, b) => (b.revealed_total || 0) - (a.revealed_total || 0)).map(bid => {
+              {sortedBids.map(bid => {
                 const team = teams.find(t => t.id === bid.team_id)
                 const isWinner = winningBid && bid.id === winningBid.id
                 return (
                   <tr key={bid.team_id} className={`border-b border-gray-800 ${isWinner ? 'text-yellow-400 font-bold' : ''}`}>
                     <td className="py-2">{isWinner ? '🏆 ' : ''}{team?.name}</td>
                     <td className="py-2">{bid.revealed_player_given ? `${bid.revealed_player_given}` : '—'}</td>
+                    <td className="py-2 text-right text-gray-400 text-xs font-mono">+{bid.revealed_extra_credits ?? 0}</td>
                     <td className="py-2 text-right">{bid.revealed_total !== null ? `${bid.revealed_total} cr` : '...'}</td>
                   </tr>
                 )
