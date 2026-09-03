@@ -6,7 +6,24 @@ import { supabase } from '@/lib/supabase'
 
 type Team = { id: string; name: string }
 type Round = { id: string; player_name: string; status: string; round_number: number }
-type Bid = { id: string; team_id: string; participation: string; commit_hash: string | null; revealed_total: number | null; revealed_player_given: string | null; revealed_purchase_price: number | null; revealed_extra_credits: number | null }
+type Bid = { 
+  id: string; 
+  team_id: string; 
+  participation: string; 
+  commit_hash: string | null; 
+  revealed_total: number | null; 
+  revealed_player_given: string | null; 
+  revealed_purchase_price: number | null; 
+  revealed_extra_credits: number | null 
+}
+type HistoryItem = {
+  id: string;
+  round_id: string;
+  player_name: string;
+  winning_team_id: string;
+  winning_amount: number;
+  teams: { name: string } | null;
+}
 
 export default function AdminPage() {
   const { roomId } = useParams()
@@ -14,6 +31,9 @@ export default function AdminPage() {
   const [teams, setTeams] = useState<Team[]>([])
   const [currentRound, setCurrentRound] = useState<Round | null>(null)
   const [bids, setBids] = useState<Bid[]>([])
+  const [history, setHistory] = useState<HistoryItem[]>([])
+  const [historyBids, setHistoryBids] = useState<Record<string, Bid[]>>({})
+  const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(null)
   const [playerInput, setPlayerInput] = useState('')
   const [loading, setLoading] = useState(false)
 
@@ -21,20 +41,27 @@ export default function AdminPage() {
     setRoomCode(localStorage.getItem('room_code') || '')
     loadTeams()
     loadCurrentRound()
+    loadHistory()
 
     const teamsSub = supabase
-      .channel('teams')
+      .channel('admin-teams')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'teams', filter: `room_id=eq.${roomId}` }, loadTeams)
       .subscribe()
 
     const roundsSub = supabase
-      .channel('rounds')
+      .channel('admin-rounds')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'auction_rounds', filter: `room_id=eq.${roomId}` }, loadCurrentRound)
+      .subscribe()
+
+    const historySub = supabase
+      .channel('admin-history')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'history', filter: `room_id=eq.${roomId}` }, loadHistory)
       .subscribe()
 
     return () => {
       supabase.removeChannel(teamsSub)
       supabase.removeChannel(roundsSub)
+      supabase.removeChannel(historySub)
     }
   }, [roomId])
 
@@ -42,7 +69,7 @@ export default function AdminPage() {
     if (!currentRound) return
     loadBids()
     const bidsSub = supabase
-      .channel('bids')
+      .channel('admin-bids')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'bids', filter: `round_id=eq.${currentRound.id}` }, loadBids)
       .subscribe()
     return () => { supabase.removeChannel(bidsSub) }
@@ -69,6 +96,28 @@ export default function AdminPage() {
     if (!currentRound) return
     const { data } = await supabase.from('bids').select().eq('round_id', currentRound.id)
     if (data) setBids(data)
+  }
+
+  async function loadHistory() {
+    const { data } = await supabase
+      .from('history')
+      .select('id, round_id, player_name, winning_amount, winning_team_id, teams(name)')
+      .eq('room_id', roomId)
+      .order('created_at', { ascending: false })
+
+    if (data) setHistory(data as unknown as HistoryItem[])
+  }
+
+  async function toggleHistoryBids(roundId: string, historyId: string) {
+    if (expandedHistoryId === historyId) {
+      setExpandedHistoryId(null)
+      return
+    }
+    const { data } = await supabase.from('bids').select().eq('round_id', roundId)
+    if (data) {
+      setHistoryBids(prev => ({ ...prev, [historyId]: data }))
+      setExpandedHistoryId(historyId)
+    }
   }
 
   async function startRound() {
@@ -102,9 +151,18 @@ export default function AdminPage() {
 
   async function declareWinner() {
     if (!currentRound) return
-    const validBids = bids.filter(b => b.participation === 'joined' && b.revealed_total !== null)
-    if (validBids.length === 0) return
-    const winner = validBids.reduce((a, b) => (b.revealed_total! > a.revealed_total! ? b : a))
+    const validBids = bids.filter(b => b.participation === 'joined' && b.revealed_total !== null && b.revealed_total !== undefined)
+    
+    if (validBids.length === 0) {
+      if (confirm("Nessuna offerta ricevuta. Chiudere come INVENDUTO?")) {
+        await skipUnsoldRound()
+      }
+      return
+    }
+
+    setLoading(true)
+    const winner = validBids.reduce((a, b) => ((b.revealed_total ?? 0) > (a.revealed_total ?? 0) ? b : a))
+
     await supabase.from('history').insert({
       round_id: currentRound.id,
       room_id: roomId,
@@ -112,37 +170,60 @@ export default function AdminPage() {
       winning_team_id: winner.team_id,
       winning_amount: winner.revealed_total,
     })
+
     await supabase.from('auction_rounds').update({ status: 'winner_declared' }).eq('id', currentRound.id)
     await loadCurrentRound()
+    await loadHistory()
+    setLoading(false)
   }
 
-  const participatingBids = bids.filter(b => b.participation === 'joined')
-  const sealedBids = bids.filter(b => b.participation === 'joined' && b.commit_hash)
-  const skippedBids = bids.filter(b => b.participation === 'skipped')
+  async function skipUnsoldRound() {
+    if (!currentRound) return
+    setLoading(true)
+    await supabase.from('auction_rounds').update({ status: 'winner_declared' }).eq('id', currentRound.id)
+    await loadCurrentRound()
+    setLoading(false)
+  }
+
+  async function deleteHistoryItem(historyId: string) {
+    if (!confirm("Sei sicuro di voler annullare questa aggiudicazione?")) return
+    setLoading(true)
+    await supabase.from('history').delete().eq('id', historyId)
+    await loadHistory()
+    setLoading(false)
+  }
+
+  async function changeWinnerTeam(historyId: string, newTeamId: string) {
+    setLoading(true)
+    await supabase.from('history').update({ winning_team_id: newTeamId }).eq('id', historyId)
+    await loadHistory()
+    setLoading(false)
+  }
+
   const winner = currentRound?.status === 'revealed'
-    ? bids.filter(b => b.revealed_total !== null).reduce<Bid | null>((a, b) => (!a || b.revealed_total! > a.revealed_total! ? b : a), null)
+    ? bids.filter(b => b.revealed_total !== null).reduce<Bid | null>((a, b) => (!a || (b.revealed_total ?? 0) > (a.revealed_total ?? 0) ? b : a), null)
     : null
 
   return (
-    <main className="min-h-screen bg-black text-white p-4 max-w-lg mx-auto">
+    <main className="min-h-screen bg-black text-white p-4 max-w-lg mx-auto font-sans pb-16">
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-xl font-bold">👑 Admin</h1>
+        <h1 className="text-xl font-bold">👑 Admin / Banditore</h1>
         <span className="bg-gray-800 px-3 py-1 rounded-lg text-sm font-mono">{roomCode}</span>
       </div>
 
       {/* Squadre */}
       <div className="mb-6">
-        <p className="text-gray-400 text-sm mb-2">Squadre ({teams.length}/10)</p>
+        <p className="text-gray-400 text-sm mb-2">Squadre collegate ({teams.length}/10)</p>
         <div className="flex flex-wrap gap-2">
           {teams.map(t => (
-            <span key={t.id} className="bg-gray-800 px-3 py-1 rounded-full text-sm">{t.name}</span>
+            <span key={t.id} className="bg-gray-800 border border-gray-700 px-3 py-1 rounded-full text-xs">{t.name}</span>
           ))}
         </div>
       </div>
 
-      {/* Nessun round attivo */}
+      {/* Controlli Asta */}
       {!currentRound || currentRound.status === 'winner_declared' ? (
-        <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-3 mb-8">
           <input
             className="bg-gray-900 border border-gray-700 rounded-xl px-4 py-3 text-white placeholder-gray-500 uppercase"
             placeholder="Nome giocatore (es. LAUTARO)"
@@ -151,39 +232,42 @@ export default function AdminPage() {
           />
           <button
             onClick={startRound}
-            disabled={loading}
-            className="bg-white text-black font-bold py-4 rounded-xl text-lg disabled:opacity-50"
+            disabled={loading || !playerInput.trim()}
+            className="bg-white text-black font-bold py-4 rounded-xl text-lg disabled:opacity-50 active:scale-95 transition-transform select-none touch-manipulation"
           >
             🔴 Metti in asta
           </button>
         </div>
       ) : (
-        <div>
-          <div className="bg-gray-900 rounded-2xl p-4 mb-4 text-center">
+        <div className="mb-8">
+          <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 mb-4 text-center">
             <p className="text-gray-400 text-xs mb-1">In asta</p>
             <p className="text-2xl font-bold">{currentRound.player_name}</p>
-            <p className="text-gray-500 text-xs mt-1">{currentRound.status}</p>
+            <span className="inline-block mt-2 bg-gray-800 text-yellow-400 px-3 py-1 rounded-full text-xs font-mono uppercase">
+              {currentRound.status}
+            </span>
           </div>
 
-          {/* Stato offerte */}
           {currentRound.status === 'open_for_participation' && (
             <div className="mb-4">
-              {teams.map(t => {
-                const bid = bids.find(b => b.team_id === t.id)
-                return (
-                  <div key={t.id} className="flex items-center justify-between py-2 border-b border-gray-800">
-                    <span>{t.name}</span>
-                    {!bid || bid.participation === 'pending' ? <span className="text-gray-500 text-sm">⏳ in attesa</span>
-                      : bid.participation === 'skipped' ? <span className="text-gray-500 text-sm">⚪ salta</span>
-                      : bid.commit_hash ? <span className="text-green-400 text-sm">🟢 sigillata</span>
-                      : <span className="text-yellow-400 text-sm">🟡 partecipa</span>}
-                  </div>
-                )
-              })}
-              <button
-                onClick={closeRound}
-                disabled={loading}
-                className="w-full mt-4 bg-red-600 text-white font-bold py-4 rounded-xl text-lg disabled:opacity-50"
+              <div className="flex flex-col gap-1 mb-4">
+                {teams.map(t => {
+                  const bid = bids.find(b => b.team_id === t.id)
+                  return (
+                    <div key={t.id} className="flex items-center justify-between py-2 border-b border-gray-800 text-sm">
+                      <span>{t.name}</span>
+                      {!bid || bid.participation === 'pending' ? <span className="text-gray-500">⏳ in attesa</span>
+                        : bid.participation === 'skipped' ? <span className="text-gray-500">⚪ salta</span>
+                        : bid.commit_hash ? <span className="text-green-400 font-bold">🟢 sigillata</span>
+                        : <span className="text-yellow-400">🟡 partecipa</span>}
+                    </div>
+                  )
+                })}
+              </div>
+              <button 
+                onClick={closeRound} 
+                disabled={loading} 
+                className="w-full bg-red-600 font-bold py-4 rounded-xl text-lg disabled:opacity-50 active:scale-95 transition-transform select-none touch-manipulation"
               >
                 🔒 Chiudi turno
               </button>
@@ -191,10 +275,10 @@ export default function AdminPage() {
           )}
 
           {currentRound.status === 'closed' && (
-            <button
-              onClick={revealBids}
-              disabled={loading}
-              className="w-full bg-yellow-500 text-black font-bold py-4 rounded-xl text-lg disabled:opacity-50"
+            <button 
+              onClick={revealBids} 
+              disabled={loading} 
+              className="w-full bg-yellow-500 text-black font-bold py-4 rounded-xl text-lg disabled:opacity-50 active:scale-95 transition-transform select-none touch-manipulation"
             >
               🔓 Apri offerte
             </button>
@@ -202,40 +286,114 @@ export default function AdminPage() {
 
           {currentRound.status === 'revealed' && (
             <div>
-              <div className="mb-4 overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="text-gray-400 border-b border-gray-800">
-                      <th className="text-left py-2">Squadra</th>
-                      <th className="text-left py-2">Ceduto</th>
-                      <th className="text-right py-2">Offerta</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {bids.filter(b => b.participation === 'joined').sort((a, b) => (b.revealed_total || 0) - (a.revealed_total || 0)).map(bid => {
-                      const team = teams.find(t => t.id === bid.team_id)
-                      const isWinner = bid === winner
-                      return (
-                        <tr key={bid.id} className={`border-b border-gray-800 ${isWinner ? 'text-yellow-400 font-bold' : ''}`}>
-                          <td className="py-2">{isWinner ? '🏆 ' : ''}{team?.name}</td>
-                          <td className="py-2">{bid.revealed_player_given} ({bid.revealed_purchase_price})</td>
-                          <td className="py-2 text-right">{bid.revealed_total}</td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </div>
-              <button
-                onClick={declareWinner}
-                className="w-full bg-yellow-500 text-black font-bold py-4 rounded-xl text-lg"
+              <table className="w-full text-sm mb-4">
+                <thead>
+                  <tr className="text-gray-400 border-b border-gray-800">
+                    <th className="text-left py-2">Squadra</th>
+                    <th className="text-left py-2">Ceduto</th>
+                    <th className="text-right py-2">Offerta</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {bids.filter(b => b.participation === 'joined').sort((a, b) => (b.revealed_total || 0) - (a.revealed_total || 0)).map(bid => {
+                    const team = teams.find(t => t.id === bid.team_id)
+                    const isWinner = winner && bid.id === winner.id
+                    return (
+                      <tr key={bid.id} className={`border-b border-gray-800 ${isWinner ? 'text-yellow-400 font-bold' : ''}`}>
+                        <td className="py-2">{isWinner ? '🏆 ' : ''}{team?.name}</td>
+                        <td className="py-2">{bid.revealed_player_given ? `${bid.revealed_player_given} (${bid.revealed_purchase_price})` : '—'}</td>
+                        <td className="py-2 text-right">{bid.revealed_total !== null ? `${bid.revealed_total} cr` : 'In attesa...'}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+              <button 
+                onClick={declareWinner} 
+                disabled={loading} 
+                className="w-full bg-green-500 text-black font-bold py-4 rounded-xl text-lg disabled:opacity-50 mb-3 active:scale-95 transition-transform select-none touch-manipulation"
               >
-                ✅ Conferma vincitore e prossimo giocatore
+                ✅ Conferma vincitore e prossimo
               </button>
             </div>
           )}
+
+          <button 
+            onClick={skipUnsoldRound} 
+            disabled={loading} 
+            className="w-full bg-gray-900 border border-gray-700 text-gray-400 font-bold py-3 rounded-xl text-xs active:scale-95 transition-transform select-none touch-manipulation"
+          >
+            🚫 Segna come Invenduto / Salta Round
+          </button>
         </div>
       )}
+
+      {/* Lista Giocatori Assegnati */}
+      <div className="border-t border-gray-800 pt-6">
+        <h2 className="text-lg font-bold mb-4">📋 Giocatori Assegnati ({history.length})</h2>
+        {history.length === 0 ? (
+          <p className="text-xs text-gray-500">Nessun calciatore ancora aggiudicato.</p>
+        ) : (
+          <div className="flex flex-col gap-3">
+            {history.map(item => (
+              <div key={item.id} className="bg-gray-900 border border-gray-800 rounded-xl p-3">
+                <div className="flex justify-between items-start mb-2">
+                  <div>
+                    <p className="font-bold text-white">{item.player_name}</p>
+                    <p className="text-xs text-yellow-400 font-medium">
+                      {item.winning_amount} cr — <span className="text-gray-300">{item.teams?.name}</span>
+                    </p>
+                  </div>
+                  <button 
+                    onClick={() => deleteHistoryItem(item.id)} 
+                    className="text-red-400 text-xs px-2 py-1 bg-red-950/40 border border-red-900 rounded active:scale-95 transition-transform select-none touch-manipulation"
+                  >
+                    🗑 Annulla
+                  </button>
+                </div>
+
+                <div className="flex items-center justify-between gap-2 mt-3 pt-2 border-t border-gray-800/60">
+                  <div className="flex items-center gap-1 text-xs">
+                    <span className="text-gray-500">Cambia:</span>
+                    <select
+                      value={item.winning_team_id}
+                      onChange={e => changeWinnerTeam(item.id, e.target.value)}
+                      className="bg-black border border-gray-700 rounded px-2 py-1 text-white text-xs"
+                    >
+                      {teams.map(t => (
+                        <option key={t.id} value={t.id}>{t.name}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <button
+                    onClick={() => toggleHistoryBids(item.round_id, item.id)}
+                    className="text-xs text-gray-400 underline"
+                  >
+                    {expandedHistoryId === item.id ? 'Nascondi buste ▲' : 'Vedi buste ▼'}
+                  </button>
+                </div>
+
+                {expandedHistoryId === item.id && (
+                  <div className="mt-3 bg-black/60 p-2 rounded border border-gray-800 text-xs">
+                    <p className="text-gray-500 font-bold mb-1">Riepilogo Tutte le Buste:</p>
+                    {historyBids[item.id]?.filter(b => b.participation === 'joined').map(b => {
+                      const tName = teams.find(t => t.id === b.team_id)?.name
+                      return (
+                        <div key={b.id} className="flex justify-between py-1 border-b border-gray-800/40">
+                          <span>{tName}</span>
+                          <span className="text-gray-400">{b.revealed_player_given || '—'} ({b.revealed_purchase_price || 0}+{b.revealed_extra_credits || 0})</span>
+                          <span className="font-bold">{b.revealed_total} cr</span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </main>
   )
 }
