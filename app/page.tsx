@@ -1,5 +1,7 @@
 'use client'
 
+export const dynamic = 'force-dynamic';
+
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
@@ -103,7 +105,7 @@ export default function Home() {
   return (
     <main className="min-h-screen bg-black text-white flex flex-col items-center justify-center p-6 font-sans">
       <h1 className="text-3xl font-bold mb-2">🏆 Asta Buste Private</h1>
-      <p className="text-gray-400 mb-10 text-sm">Fantacalcio — sistema commit-reveal</p>
+      <p className="text-gray-400 mb-10 text-sm">FantaPandy — sistema commit-reveal "CRETINY"</p>
 
       {mode === 'choose' && (
         <div className="flex flex-col gap-4 w-full max-w-xs">
