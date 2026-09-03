@@ -10,12 +10,17 @@ export default function Home() {
   const router = useRouter()
   const [mode, setMode] = useState<'choose' | 'join'>('choose')
   const [creationMode, setCreationMode] = useState<'preset' | 'free'>('preset')
-  const [teamName, setTeamName] = useState('')
+  
+  // Stati per la gestione dell'accesso
   const [joinCode, setJoinCode] = useState('')
+  const [teamName, setTeamName] = useState('')
+  const [availableTeams, setAvailableTeams] = useState<string[]>([])
+  const [roomData, setRoomData] = useState<any>(null)
+  
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
-  // 1. Crea la Stanza come Admin (Verifica Password da Database)
+  // 1. Crea la Stanza come Admin
   async function createRoom() {
     const password = prompt("Inserisci la password Admin per creare una stanza:")
     if (!password) return
@@ -26,7 +31,6 @@ export default function Home() {
     try {
       let teamsToUpload: string[] = []
 
-      // Se la modalità è preset, recupera le squadre e valida la password da Supabase
       if (creationMode === 'preset') {
         const { data: presetRoom, error: fetchError } = await supabase
           .from('rooms')
@@ -65,13 +69,11 @@ export default function Home() {
         throw new Error('Errore nella creazione della stanza su Supabase.')
       }
 
-      // Salva i dati locali dell'Admin
       localStorage.setItem('room_id', room.id)
       localStorage.setItem('room_code', room.code)
       localStorage.setItem('admin_token', room.admin_token)
       localStorage.setItem('is_admin', 'true')
 
-      // Vai al pannello Admin
       router.push(`/admin/${room.id}`)
     } catch (err: any) {
       setError(err.message || 'Errore imprevisto')
@@ -79,9 +81,9 @@ export default function Home() {
     }
   }
 
-  // 2. Entra come Squadra Partecipante
-  async function joinRoom() {
-    if (!teamName.trim() || !joinCode.trim()) return
+  // 2. Cerca la stanza tramite Codice per caricare i dati e le squadre
+  async function checkRoomCode() {
+    if (!joinCode.trim()) return
     setLoading(true)
     setError('')
 
@@ -97,11 +99,40 @@ export default function Home() {
       return
     }
 
+    // Recupera le squadre già occupate nella stanza
+    const { data: takenTeams } = await supabase
+      .from('teams')
+      .select('name')
+      .eq('room_id', room.id)
+
+    const takenNames = takenTeams?.map(t => t.name) || []
+
+    // Filtra le squadre disponibili (se in modalità preset)
+    if (room.mode === 'preset' && room.available_teams) {
+      const remaining = (room.available_teams as string[]).filter(
+        name => !takenNames.includes(name)
+      )
+      setAvailableTeams(remaining)
+      if (remaining.length > 0) {
+        setTeamName(remaining[0]) // Seleziona la prima squadra disponibile di default
+      }
+    }
+
+    setRoomData(room)
+    setLoading(false)
+  }
+
+  // 3. Conferma l'ingresso nella stanza
+  async function joinRoom() {
+    if (!teamName.trim() || !roomData) return
+    setLoading(true)
+    setError('')
+
     // Controllo limite 10 squadre
     const { count } = await supabase
       .from('teams')
       .select('*', { count: 'exact', head: true })
-      .eq('room_id', room.id)
+      .eq('room_id', roomData.id)
 
     if (count !== null && count >= 10) {
       setError('Stanza piena (10/10)')
@@ -111,23 +142,23 @@ export default function Home() {
 
     const { data: team, error: teamError } = await supabase
       .from('teams')
-      .insert({ room_id: room.id, name: teamName.trim() })
+      .insert({ room_id: roomData.id, name: teamName.trim() })
       .select()
       .single()
 
     if (teamError) {
-      setError('Nome già in uso in questa stanza')
+      setError('Nome già occupato o errore di connessione')
       setLoading(false)
       return
     }
 
     localStorage.setItem('team_id', team.id)
     localStorage.setItem('team_name', team.name)
-    localStorage.setItem('room_id', room.id)
-    localStorage.setItem('room_code', room.code)
+    localStorage.setItem('room_id', roomData.id)
+    localStorage.setItem('room_code', roomData.code)
     localStorage.setItem('is_admin', 'false')
 
-    router.push(`/room/${room.id}`)
+    router.push(`/room/${roomData.id}`)
   }
 
   return (
@@ -137,7 +168,6 @@ export default function Home() {
 
       {mode === 'choose' && (
         <div className="flex flex-col gap-4 w-full max-w-xs">
-          {/* Selettore Modalità Stanza per l'Admin */}
           <div className="bg-gray-900 p-3 rounded-xl border border-gray-800 text-center">
             <label className="text-[10px] text-gray-400 block mb-1.5 font-semibold uppercase tracking-wider">Modalità Stanza</label>
             <div className="flex gap-2">
@@ -185,27 +215,80 @@ export default function Home() {
 
       {mode === 'join' && (
         <div className="flex flex-col gap-4 w-full max-w-xs">
-          <input
-            className="bg-gray-900 border border-gray-700 rounded-xl px-4 py-3 text-white placeholder-gray-500"
-            placeholder="Nome della tua squadra"
-            value={teamName}
-            onChange={e => setTeamName(e.target.value)}
-          />
-          <input
-            className="bg-gray-900 border border-gray-700 rounded-xl px-4 py-3 text-white placeholder-gray-500 uppercase font-mono tracking-wider"
-            placeholder="Codice stanza"
-            value={joinCode}
-            onChange={e => setJoinCode(e.target.value)}
-          />
+          {/* FASE 1: Inserimento Codice Stanza */}
+          {!roomData ? (
+            <>
+              <input
+                className="bg-gray-900 border border-gray-700 rounded-xl px-4 py-3 text-white placeholder-gray-500 uppercase font-mono tracking-wider"
+                placeholder="Codice stanza"
+                value={joinCode}
+                onChange={e => setJoinCode(e.target.value)}
+              />
+              <button
+                onClick={checkRoomCode}
+                disabled={loading || !joinCode.trim()}
+                className="bg-white text-black font-bold py-4 rounded-xl text-lg disabled:opacity-50 active:scale-95 transition-transform select-none touch-manipulation"
+              >
+                {loading ? 'Verifica...' : 'Trova Stanza'}
+              </button>
+            </>
+          ) : (
+            /* FASE 2: Selezione Nome Squadra */
+            <>
+              <div className="bg-gray-900 p-3 rounded-xl border border-gray-800 text-center mb-2">
+                <span className="text-xs text-gray-400 block uppercase font-mono">Stanza Trovata</span>
+                <span className="text-lg font-bold text-blue-400">{roomData.code}</span>
+              </div>
+
+              {roomData.mode === 'preset' ? (
+                <div>
+                  <label className="text-xs text-gray-400 block mb-1">Seleziona la tua Squadra:</label>
+                  {availableTeams.length > 0 ? (
+                    <select
+                      className="w-full bg-gray-900 border border-gray-700 rounded-xl px-4 py-3 text-white font-semibold"
+                      value={teamName}
+                      onChange={e => setTeamName(e.target.value)}
+                    >
+                      {availableTeams.map(name => (
+                        <option key={name} value={name}>
+                          {name}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <p className="text-amber-400 text-sm text-center">Tutte le squadre sono state già scelte!</p>
+                  )}
+                </div>
+              ) : (
+                <input
+                  className="bg-gray-900 border border-gray-700 rounded-xl px-4 py-3 text-white placeholder-gray-500"
+                  placeholder="Nome della tua squadra"
+                  value={teamName}
+                  onChange={e => setTeamName(e.target.value)}
+                />
+              )}
+
+              <button
+                onClick={joinRoom}
+                disabled={loading || !teamName.trim() || (roomData.mode === 'preset' && availableTeams.length === 0)}
+                className="bg-white text-black font-bold py-4 rounded-xl text-lg disabled:opacity-50 active:scale-95 transition-transform select-none touch-manipulation"
+              >
+                {loading ? 'Accesso...' : 'Entra'}
+              </button>
+            </>
+          )}
+
           {error && <p className="text-red-400 text-sm text-center">{error}</p>}
-          <button
-            onClick={joinRoom}
-            disabled={loading || !teamName.trim() || !joinCode.trim()}
-            className="bg-white text-black font-bold py-4 rounded-xl text-lg disabled:opacity-50 active:scale-95 transition-transform select-none touch-manipulation"
+          
+          <button 
+            onClick={() => { 
+              setMode('choose'); 
+              setRoomData(null); 
+              setError(''); 
+              setJoinCode('');
+            }} 
+            className="text-gray-500 text-sm mt-2"
           >
-            {loading ? 'Accesso...' : 'Entra'}
-          </button>
-          <button onClick={() => { setMode('choose'); setError(''); }} className="text-gray-500 text-sm">
             ← indietro
           </button>
         </div>
