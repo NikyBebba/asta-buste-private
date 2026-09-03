@@ -1,4 +1,4 @@
-'use client'
+'use client';
 
 export const dynamic = 'force-dynamic';
 
@@ -9,46 +9,74 @@ import { supabase } from '@/lib/supabase'
 export default function Home() {
   const router = useRouter()
   const [mode, setMode] = useState<'choose' | 'join'>('choose')
+  const [creationMode, setCreationMode] = useState<'preset' | 'free'>('preset')
   const [teamName, setTeamName] = useState('')
   const [joinCode, setJoinCode] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
-  // 1. Crea la Stanza come Admin (Protetta da Password Master)
+  // 1. Crea la Stanza come Admin (Verifica Password da Database)
   async function createRoom() {
     const password = prompt("Inserisci la password Admin per creare una stanza:")
-
-    // Puoi cambiare con la password che preferisci!
-    if (password !== "stupidicretiny") {
-      alert("Password errata! Non sei autorizzato a creare stanze Admin.")
-      return
-    }
+    if (!password) return
 
     setLoading(true)
     setError('')
 
-    const code = Math.random().toString(36).substring(2, 8).toUpperCase()
+    try {
+      let teamsToUpload: string[] = []
 
-    const { data: room, error: roomError } = await supabase
-      .from('rooms')
-      .insert({ code, status: 'waiting' })
-      .select()
-      .single()
+      // Se la modalità è preset, recupera le squadre e valida la password da Supabase
+      if (creationMode === 'preset') {
+        const { data: presetRoom, error: fetchError } = await supabase
+          .from('rooms')
+          .select('available_teams, admin_password')
+          .eq('code', 'PANDY2026')
+          .single()
 
-    if (roomError || !room) {
-      setError('Errore nella creazione della stanza')
+        if (fetchError || !presetRoom) {
+          throw new Error("Errore nel recupero della configurazione dal database.")
+        }
+
+        if (presetRoom.admin_password && password !== presetRoom.admin_password) {
+          alert("Password Admin errata!")
+          setLoading(false)
+          return
+        }
+
+        teamsToUpload = presetRoom.available_teams || []
+      }
+
+      const code = Math.random().toString(36).substring(2, 8).toUpperCase()
+
+      const { data: room, error: roomError } = await supabase
+        .from('rooms')
+        .insert({ 
+          code, 
+          status: 'waiting',
+          mode: creationMode,
+          available_teams: teamsToUpload,
+          admin_password: password
+        })
+        .select()
+        .single()
+
+      if (roomError || !room) {
+        throw new Error('Errore nella creazione della stanza su Supabase.')
+      }
+
+      // Salva i dati locali dell'Admin
+      localStorage.setItem('room_id', room.id)
+      localStorage.setItem('room_code', room.code)
+      localStorage.setItem('admin_token', room.admin_token)
+      localStorage.setItem('is_admin', 'true')
+
+      // Vai al pannello Admin
+      router.push(`/admin/${room.id}`)
+    } catch (err: any) {
+      setError(err.message || 'Errore imprevisto')
       setLoading(false)
-      return
     }
-
-    // Salva i dati locali dell'Admin
-    localStorage.setItem('room_id', room.id)
-    localStorage.setItem('room_code', room.code)
-    localStorage.setItem('admin_token', room.admin_token)
-    localStorage.setItem('is_admin', 'true')
-
-    // Vai al pannello Admin
-    router.push(`/admin/${room.id}`)
   }
 
   // 2. Entra come Squadra Partecipante
@@ -109,6 +137,35 @@ export default function Home() {
 
       {mode === 'choose' && (
         <div className="flex flex-col gap-4 w-full max-w-xs">
+          {/* Selettore Modalità Stanza per l'Admin */}
+          <div className="bg-gray-900 p-3 rounded-xl border border-gray-800 text-center">
+            <label className="text-[10px] text-gray-400 block mb-1.5 font-semibold uppercase tracking-wider">Modalità Stanza</label>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setCreationMode('preset')}
+                className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-bold transition-all ${
+                  creationMode === 'preset'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-gray-800 text-gray-400 hover:text-white'
+                }`}
+              >
+                🏆 FantaPandy (10)
+              </button>
+              <button
+                type="button"
+                onClick={() => setCreationMode('free')}
+                className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-bold transition-all ${
+                  creationMode === 'free'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-gray-800 text-gray-400 hover:text-white'
+                }`}
+              >
+                ⚙️ Libera
+              </button>
+            </div>
+          </div>
+
           <button
             onClick={createRoom}
             disabled={loading}
