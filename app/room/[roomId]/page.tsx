@@ -30,6 +30,12 @@ export default function RoomPage() {
   const [allBids, setAllBids] = useState<Bid[]>([])
   const [teams, setTeams] = useState<{ id: string; name: string }[]>([])
 
+  // Funzione che accetta solo cifre numeriche (0-9) e previene lettere/simboli
+  const handleNumericInput = (value: string, setter: (val: string) => void) => {
+    const cleanValue = value.replace(/[^0-9]/g, '')
+    setter(cleanValue)
+  }
+
   useEffect(() => {
     setTeamId(localStorage.getItem('team_id') || '')
     setTeamName(localStorage.getItem('team_name') || '')
@@ -150,7 +156,7 @@ export default function RoomPage() {
     if (!currentRound || !teamId || !playerGiven || !purchasePrice) return
     setLoading(true)
 
-    const price = parseInt(purchasePrice)
+    const price = parseInt(purchasePrice) || 0
     const extra = parseInt(extraCredits) || 0
     const total = price + extra
 
@@ -181,7 +187,6 @@ export default function RoomPage() {
   // LOGICA TIE-BREAK PARI TOTALE E PARI EXTRA
   const validBids = allBids.filter(b => b.participation === 'joined' && b.revealed_total !== null)
   
-  // Ordina le buste: prima per Totale DESC, poi per Crediti Extra DESC
   const sortedBids = [...validBids].sort((a, b) => {
     const totA = a.revealed_total ?? 0
     const totB = b.revealed_total ?? 0
@@ -192,7 +197,6 @@ export default function RoomPage() {
     return extraB - extraA
   })
 
-  // Verifica se le prime due offerte sono in pareggio assoluto
   const isPerfectTie = sortedBids.length > 1 && 
     sortedBids[0].revealed_total === sortedBids[1].revealed_total && 
     sortedBids[0].revealed_extra_credits === sortedBids[1].revealed_extra_credits
@@ -288,16 +292,20 @@ export default function RoomPage() {
           <input
             className="bg-gray-900 border border-gray-700 rounded-xl px-4 py-3 text-white placeholder-gray-500"
             placeholder="Prezzo acquisto"
-            type="number"
+            type="text"
+            inputMode="numeric"
+            pattern="[0-9]*"
             value={purchasePrice}
-            onChange={e => setPurchasePrice(e.target.value)}
+            onChange={e => handleNumericInput(e.target.value, setPurchasePrice)}
           />
           <input
             className="bg-gray-900 border border-gray-700 rounded-xl px-4 py-3 text-white placeholder-gray-500"
             placeholder="Crediti aggiuntivi"
-            type="number"
+            type="text"
+            inputMode="numeric"
+            pattern="[0-9]*"
             value={extraCredits}
-            onChange={e => setExtraCredits(e.target.value)}
+            onChange={e => handleNumericInput(e.target.value, setExtraCredits)}
           />
           {purchasePrice && (
             <div className="bg-gray-800 rounded-xl p-3 text-center">
