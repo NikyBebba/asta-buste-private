@@ -8,23 +8,52 @@ import { supabase } from '@/lib/supabase'
 
 export default function Home() {
   const router = useRouter()
-  const [mode, setMode] = useState<'choose' | 'join'>('choose')
-  const [creationMode, setCreationMode] = useState<'preset' | 'free'>('preset')
+  const [mode, setMode] = useState<'choose' | 'admin_auth' | 'admin_config' | 'join'>('choose')
   
-  // Stati per la gestione dell'accesso
+  // Configurazione Admin
+  const [adminPasswordInput, setAdminPasswordInput] = useState('')
+  const [sessionName, setSessionName] = useState('Asta Iniziale 2026/27')
+  const [creationMode, setCreationMode] = useState<'preset' | 'free'>('preset')
+
+  // Accesso Partecipante
   const [joinCode, setJoinCode] = useState('')
   const [teamName, setTeamName] = useState('')
   const [availableTeams, setAvailableTeams] = useState<string[]>([])
   const [roomData, setRoomData] = useState<any>(null)
-  
+
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
-  // 1. Crea la Stanza come Admin
-  async function createRoom() {
-    const password = prompt("Inserisci la password Admin per creare una stanza:")
-    if (!password) return
+  // 1. Verifica Password Master Admin
+  async function verifyAdminPassword() {
+    setError('')
+    setLoading(true)
 
+    const { data: presetRoom, error: fetchError } = await supabase
+      .from('rooms')
+      .select('admin_password')
+      .eq('code', 'PANDY2026')
+      .single()
+
+    setLoading(false)
+
+    if (fetchError || !presetRoom) {
+      setError('Errore nel recupero della configurazione Admin')
+      return
+    }
+
+    if (adminPasswordInput !== presetRoom.admin_password) {
+      setError('Password errata!')
+      return
+    }
+
+    // Password corretta: passa alla configurazione della sessione
+    setMode('admin_config')
+  }
+
+  // 2. Crea la Stanza con i Dati della Sessione
+  async function createRoom() {
+    if (!sessionName.trim()) return
     setLoading(true)
     setError('')
 
@@ -32,23 +61,13 @@ export default function Home() {
       let teamsToUpload: string[] = []
 
       if (creationMode === 'preset') {
-        const { data: presetRoom, error: fetchError } = await supabase
+        const { data: presetRoom } = await supabase
           .from('rooms')
-          .select('available_teams, admin_password')
+          .select('available_teams')
           .eq('code', 'PANDY2026')
           .single()
 
-        if (fetchError || !presetRoom) {
-          throw new Error("Errore nel recupero della configurazione dal database.")
-        }
-
-        if (presetRoom.admin_password && password !== presetRoom.admin_password) {
-          alert("Password Admin errata!")
-          setLoading(false)
-          return
-        }
-
-        teamsToUpload = presetRoom.available_teams || []
+        teamsToUpload = presetRoom?.available_teams || []
       }
 
       const code = Math.random().toString(36).substring(2, 8).toUpperCase()
@@ -59,15 +78,14 @@ export default function Home() {
           code, 
           status: 'waiting',
           mode: creationMode,
+          session_name: sessionName.trim(),
           available_teams: teamsToUpload,
-          admin_password: password
+          admin_password: adminPasswordInput
         })
         .select()
         .single()
 
-      if (roomError || !room) {
-        throw new Error('Errore nella creazione della stanza su Supabase.')
-      }
+      if (roomError || !room) throw new Error('Errore nella creazione della stanza')
 
       localStorage.setItem('room_id', room.id)
       localStorage.setItem('room_code', room.code)
@@ -81,7 +99,7 @@ export default function Home() {
     }
   }
 
-  // 2. Cerca la stanza tramite Codice per caricare i dati e le squadre
+  // 3. Cerca Stanza per Partecipante
   async function checkRoomCode() {
     if (!joinCode.trim()) return
     setLoading(true)
@@ -99,7 +117,6 @@ export default function Home() {
       return
     }
 
-    // Recupera le squadre già occupate nella stanza
     const { data: takenTeams } = await supabase
       .from('teams')
       .select('name')
@@ -107,28 +124,24 @@ export default function Home() {
 
     const takenNames = takenTeams?.map(t => t.name) || []
 
-    // Filtra le squadre disponibili (se in modalità preset)
     if (room.mode === 'preset' && room.available_teams) {
       const remaining = (room.available_teams as string[]).filter(
         name => !takenNames.includes(name)
       )
       setAvailableTeams(remaining)
-      if (remaining.length > 0) {
-        setTeamName(remaining[0]) // Seleziona la prima squadra disponibile di default
-      }
+      if (remaining.length > 0) setTeamName(remaining[0])
     }
 
     setRoomData(room)
     setLoading(false)
   }
 
-  // 3. Conferma l'ingresso nella stanza
+  // 4. Entra nella Stanza
   async function joinRoom() {
     if (!teamName.trim() || !roomData) return
     setLoading(true)
     setError('')
 
-    // Controllo limite 10 squadre
     const { count } = await supabase
       .from('teams')
       .select('*', { count: 'exact', head: true })
@@ -166,18 +179,72 @@ export default function Home() {
       <h1 className="text-3xl font-bold mb-2">🏆 Asta Buste Private</h1>
       <p className="text-gray-400 mb-10 text-sm">FantaPandy — sistema commit-reveal "CRETINY"</p>
 
+      {/* SCHERMATA INIZIALE */}
       {mode === 'choose' && (
         <div className="flex flex-col gap-4 w-full max-w-xs">
+          <button
+            onClick={() => { setMode('admin_auth'); setError(''); }}
+            className="bg-white text-black font-bold py-4 rounded-xl text-lg active:scale-95 transition-transform select-none touch-manipulation"
+          >
+            👑 Crea stanza (Admin)
+          </button>
+          <button
+            onClick={() => { setMode('join'); setError(''); }}
+            className="border border-white text-white font-bold py-4 rounded-xl text-lg active:scale-95 transition-transform select-none touch-manipulation"
+          >
+            🚪 Entra in una stanza
+          </button>
+        </div>
+      )}
+
+      {/* LOGIN ADMIN (PASSWORD) */}
+      {mode === 'admin_auth' && (
+        <div className="flex flex-col gap-4 w-full max-w-xs">
+          <h2 className="text-xl font-bold text-center">Area Riservata Admin</h2>
+          <input
+            type="password"
+            className="bg-gray-900 border border-gray-700 rounded-xl px-4 py-3 text-white placeholder-gray-500"
+            placeholder="Password Master Admin"
+            value={adminPasswordInput}
+            onChange={e => setAdminPasswordInput(e.target.value)}
+          />
+          {error && <p className="text-red-400 text-sm text-center">{error}</p>}
+          <button
+            onClick={verifyAdminPassword}
+            disabled={loading || !adminPasswordInput.trim()}
+            className="bg-white text-black font-bold py-4 rounded-xl text-lg disabled:opacity-50 active:scale-95 transition-transform select-none touch-manipulation"
+          >
+            {loading ? 'Verifica...' : 'Accedi'}
+          </button>
+          <button onClick={() => { setMode('choose'); setError(''); }} className="text-gray-500 text-sm text-center">
+            ← Indietro
+          </button>
+        </div>
+      )}
+
+      {/* CONFIGURAZIONE SESSIONE ADMIN */}
+      {mode === 'admin_config' && (
+        <div className="flex flex-col gap-4 w-full max-w-xs">
+          <h2 className="text-xl font-bold text-center">Configura Nuova Sessione</h2>
+          
+          <div>
+            <label className="text-xs text-gray-400 block mb-1">Nome della Sessione:</label>
+            <input
+              className="w-full bg-gray-900 border border-gray-700 rounded-xl px-4 py-3 text-white placeholder-gray-500"
+              placeholder="es. Asta Estiva 2026/27"
+              value={sessionName}
+              onChange={e => setSessionName(e.target.value)}
+            />
+          </div>
+
           <div className="bg-gray-900 p-3 rounded-xl border border-gray-800 text-center">
-            <label className="text-[10px] text-gray-400 block mb-1.5 font-semibold uppercase tracking-wider">Modalità Stanza</label>
+            <label className="text-[10px] text-gray-400 block mb-1.5 font-semibold uppercase tracking-wider">Modalità Lega</label>
             <div className="flex gap-2">
               <button
                 type="button"
                 onClick={() => setCreationMode('preset')}
                 className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-bold transition-all ${
-                  creationMode === 'preset'
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-800 text-gray-400 hover:text-white'
+                  creationMode === 'preset' ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'
                 }`}
               >
                 🏆 FantaPandy (10)
@@ -186,9 +253,7 @@ export default function Home() {
                 type="button"
                 onClick={() => setCreationMode('free')}
                 className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-bold transition-all ${
-                  creationMode === 'free'
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-800 text-gray-400 hover:text-white'
+                  creationMode === 'free' ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'
                 }`}
               >
                 ⚙️ Libera
@@ -196,26 +261,21 @@ export default function Home() {
             </div>
           </div>
 
+          {error && <p className="text-red-400 text-sm text-center">{error}</p>}
+
           <button
             onClick={createRoom}
-            disabled={loading}
+            disabled={loading || !sessionName.trim()}
             className="bg-white text-black font-bold py-4 rounded-xl text-lg disabled:opacity-50 active:scale-95 transition-transform select-none touch-manipulation"
           >
-            {loading ? 'Creazione...' : '👑 Crea stanza (Admin)'}
+            {loading ? 'Avvio...' : '🚀 Avvia Sessione Asta'}
           </button>
-          <button
-            onClick={() => setMode('join')}
-            className="border border-white text-white font-bold py-4 rounded-xl text-lg active:scale-95 transition-transform select-none touch-manipulation"
-          >
-            🚪 Entra in una stanza
-          </button>
-          {error && <p className="text-red-400 text-sm text-center">{error}</p>}
         </div>
       )}
 
+      {/* ACCESSO GIOCATORE */}
       {mode === 'join' && (
         <div className="flex flex-col gap-4 w-full max-w-xs">
-          {/* FASE 1: Inserimento Codice Stanza */}
           {!roomData ? (
             <>
               <input
@@ -233,10 +293,11 @@ export default function Home() {
               </button>
             </>
           ) : (
-            /* FASE 2: Selezione Nome Squadra */
             <>
               <div className="bg-gray-900 p-3 rounded-xl border border-gray-800 text-center mb-2">
-                <span className="text-xs text-gray-400 block uppercase font-mono">Stanza Trovata</span>
+                <span className="text-xs text-gray-400 block uppercase font-mono">
+                  {roomData.session_name || 'Stanza Trovata'}
+                </span>
                 <span className="text-lg font-bold text-blue-400">{roomData.code}</span>
               </div>
 
@@ -256,7 +317,7 @@ export default function Home() {
                       ))}
                     </select>
                   ) : (
-                    <p className="text-amber-400 text-sm text-center">Tutte le squadre sono state già scelte!</p>
+                    <p className="text-amber-400 text-sm text-center">Tutte le squadre sono già state scelte!</p>
                   )}
                 </div>
               ) : (
@@ -279,7 +340,7 @@ export default function Home() {
           )}
 
           {error && <p className="text-red-400 text-sm text-center">{error}</p>}
-          
+
           <button 
             onClick={() => { 
               setMode('choose'); 
@@ -287,9 +348,9 @@ export default function Home() {
               setError(''); 
               setJoinCode('');
             }} 
-            className="text-gray-500 text-sm mt-2"
+            className="text-gray-500 text-sm mt-2 text-center"
           >
-            ← indietro
+            ← Indietro
           </button>
         </div>
       )}
